@@ -15,6 +15,7 @@ class Frame_Todo : public Frame_Base {
     Frame_Todo();
     ~Frame_Todo();
     int init(epdgui_args_vector_t &args);
+    int run();
 
     void Toggle(int idx);
     void Remove(int idx);
@@ -37,6 +38,8 @@ class Frame_Todo : public Frame_Base {
     void DrawNoCardFooter();
     void DrawRow(int idx);
     void DrawFooter(const char *message = nullptr);
+    // Time and date in the top-right of the title bar.
+    void DrawClock(m5epd_update_mode_t mode);
     void Refresh(m5epd_update_mode_t mode);
 
     std::vector<Item> _items;
@@ -46,6 +49,9 @@ class Frame_Todo : public Frame_Base {
     EPDGUI_Button *_key_clear;
     EpdCanvas *_blank_row;
     EpdCanvas *_footer;
+    EpdCanvas *_clock;
+    uint32_t _clock_drawn_at = 0;  // now_ms() of the last clock draw
+    uint32_t _clock_next     = 0;  // ms until the minute changes
     uint8_t _language;
     bool _has_card = false;
 };

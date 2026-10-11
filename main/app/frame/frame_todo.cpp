@@ -15,6 +15,12 @@ static const int kFooterY    = 870;
 static const int kTextX      = 60;
 static const int kMaxTextW   = kItemW - kTextX - 12;
 static const size_t kMaxText = 60;  // bytes per task
+// Clock in the title bar, right of the centred title (the title canvas is
+// pushed at y = 8 and its rule lines are at y = 70-71).
+static const int kClockX = 356;
+static const int kClockY = 12;
+static const int kClockW = 180;
+static const int kClockH = 54;
 
 static int RowY(int idx) {
     return kRowY + idx * kRowPitch;
@@ -91,6 +97,11 @@ Frame_Todo::Frame_Todo(void) {
     _footer->createCanvas(540, 48);
     _footer->setTextSize(26);
     _footer->setTextDatum(CC_DATUM);
+
+    if (!EpdCanvas::isRenderExist(20)) EpdCanvas::createRender(20, 26);
+    _clock = new EpdCanvas();
+    _clock->createCanvas(kClockW, kClockH);
+    _clock->setTextDatum(CR_DATUM);
 }
 
 Frame_Todo::~Frame_Todo(void) {
@@ -102,6 +113,7 @@ Frame_Todo::~Frame_Todo(void) {
     delete _key_clear;
     delete _blank_row;
     delete _footer;
+    delete _clock;
 }
 
 // ---------------------------------------------------------------- storage
@@ -368,11 +380,57 @@ void Frame_Todo::OpenInput() {
     _is_run = 0;
 }
 
+void Frame_Todo::DrawClock(m5epd_update_mode_t mode) {
+    static const char *kDayEn[]   = {"Sun", "Mon", "Tue", "Wed",
+                                     "Thu", "Fri", "Sat"};
+    static const char *kMonthEn[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+    static const char *kDayJa[]   = {"日", "月", "火", "水", "木", "金", "土"};
+    static const char *kDayZh[]   = {"日", "一", "二", "三", "四", "五", "六"};
+
+    struct tm now = {};
+    GetRtcLocalTime(&now);
+    int wday = (now.tm_wday >= 0 && now.tm_wday < 7) ? now.tm_wday : 0;
+    int mon  = (now.tm_mon >= 0 && now.tm_mon < 12) ? now.tm_mon : 0;
+
+    char time_buf[16], date_buf[48];
+    snprintf(time_buf, sizeof(time_buf), "%d:%02d", now.tm_hour, now.tm_min);
+    if (_language == LANGUAGE_JA) {
+        snprintf(date_buf, sizeof(date_buf), "%d月%d日 (%s)", mon + 1,
+                 now.tm_mday, kDayJa[wday]);
+    } else if (_language == LANGUAGE_ZH) {
+        snprintf(date_buf, sizeof(date_buf), "%d月%d日 周%s", mon + 1,
+                 now.tm_mday, kDayZh[wday]);
+    } else {
+        snprintf(date_buf, sizeof(date_buf), "%s %d %s %d", kDayEn[wday],
+                 now.tm_mday, kMonthEn[mon], now.tm_year + 1900);
+    }
+
+    _clock->fillCanvas(0);
+    _clock->setTextSize(26);
+    _clock->drawString(time_buf, kClockW - 4, 15);
+    _clock->setTextSize(20);
+    _clock->drawString(date_buf, kClockW - 4, 42);
+    _clock->pushCanvas(kClockX, kClockY, mode);
+
+    _clock_drawn_at = now_ms();
+    _clock_next     = (60 - now.tm_sec) * 1000;
+}
+
+int Frame_Todo::run() {
+    Frame_Base::run();
+    if (now_ms() - _clock_drawn_at >= _clock_next) {
+        DrawClock(UPDATE_MODE_GL16);
+    }
+    return 1;
+}
+
 bool Frame_Todo::DrawPowerOffScreen() {
     if (!Load()) return false;
     _has_card = true;
     EPD.Clear();
     _canvas_title->pushCanvas(0, 8, UPDATE_MODE_NONE);
+    DrawClock(UPDATE_MODE_NONE);
     Refresh(UPDATE_MODE_NONE);
     return true;
 }
@@ -397,6 +455,7 @@ int Frame_Todo::init(epdgui_args_vector_t &args) {
 
     EPD.Clear();
     _canvas_title->pushCanvas(0, 8, UPDATE_MODE_NONE);
+    DrawClock(UPDATE_MODE_NONE);
     Refresh(UPDATE_MODE_NONE);
     if (!saved) DrawNoCardFooter();
 
