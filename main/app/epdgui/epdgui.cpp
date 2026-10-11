@@ -128,6 +128,11 @@ void EPDGUI_Run(Frame_Base* frame) {
             }
             last_active_time = 0;
         }
+
+        // SD card hot-plug (mount on insert, unmount on removal)
+        if (sdcard::poll()) {
+            SetInitStatus(0, sdcard::mounted());
+        }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }

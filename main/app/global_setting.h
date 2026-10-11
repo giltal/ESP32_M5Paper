@@ -3,20 +3,18 @@
 
 #include "m5paper_port.h"
 #include <nvs.h>
+#include <ctime>
 #include <string>
-
 #define WALLPAPER_NUM 3
 
-// 是否开启自动关机省电
+// Power off automatically after a period without touch or button input
 #define ENABLE_AUTO_POWER_SAVE true
-
-// 1分钟提醒即将关机
-static const uint32_t TIME_BEFORE_SHUTDOWN_PROMPT_MS = 60 * 1000;
-// 显示10秒钟的关机提示
+// Idle time until power off (the reference app used 70 s)
+static const uint32_t TIME_BEFORE_SHUTDOWN_MS = 5 * 60 * 1000;
+// How long the "Shutdown to save power" warning is shown before that
 static const uint32_t SHUTDOWN_PROMPT_DELAY_MS = 10 * 1000;
-// 最终关机时间
-static const uint32_t TIME_BEFORE_SHUTDOWN_MS =
-    TIME_BEFORE_SHUTDOWN_PROMPT_MS + SHUTDOWN_PROMPT_DELAY_MS;
+static const uint32_t TIME_BEFORE_SHUTDOWN_PROMPT_MS =
+    TIME_BEFORE_SHUTDOWN_MS - SHUTDOWN_PROMPT_DELAY_MS;
 
 enum {
     LANGUAGE_EN = 0,  // default, English
@@ -33,14 +31,20 @@ const char* GetWallpaperName(uint16_t wallpaper_id);
 
 esp_err_t LoadSetting(void);
 esp_err_t SaveSetting(void);
+// Credentials are stored on the SD card (/wifi.txt); nothing is remembered
+// without a card. LoadWifiConfig() reads them (call after mounting the card).
 void SetWifi(std::string ssid, std::string password);
+void LoadWifiConfig(void);
 std::string GetWifiSSID(void);
 std::string GetWifiPassword(void);
 uint8_t isWiFiConfiged(void);
 bool SyncNTPTime(void);
-int8_t GetTimeZone(void);
-void SetTimeZone(int8_t time_zone);
 
+// The RTC keeps UTC; local time follows the Israel time zone rules
+// (IST UTC+2, IDT UTC+3), so daylight saving changes need no re-sync.
+void InitTimeZone(void);
+bool GetRtcLocalTime(struct tm *local);
+const char *GetTimeZoneName(bool is_dst);
 uint16_t GetTextSize();
 void SetTextSize(uint16_t size);
 

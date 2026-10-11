@@ -90,7 +90,8 @@ void SysInit_Start(void) {
     taskYIELD();
 
     LoadSetting();
-
+    LoadWifiConfig();
+    InitTimeZone();
     if ((!is_factory_test) && sdcard::exists("/font.ttf") &&
         EpdCanvas::loadFont(sdcard::path("/font.ttf").c_str()) == ESP_OK) {
         SetTTFLoaded(true);
@@ -129,8 +130,8 @@ void SysInit_Start(void) {
         EPDGUI_AddFrame("Frame_WifiScan", frame_wifiscan);
         Frame_WifiPassword *frame_wifipassword = new Frame_WifiPassword();
         EPDGUI_AddFrame("Frame_WifiPassword", frame_wifipassword);
-        Frame_Lifegame *frame_lifegame = new Frame_Lifegame();
-        EPDGUI_AddFrame("Frame_Lifegame", frame_lifegame);
+        Frame_Todo *frame_todo = new Frame_Todo();
+        EPDGUI_AddFrame("Frame_Todo", frame_todo);
         Frame_Compare *frame_compare = new Frame_Compare();
         EPDGUI_AddFrame("Frame_Compare", frame_compare);
         Frame_Home *frame_home = new Frame_Home();

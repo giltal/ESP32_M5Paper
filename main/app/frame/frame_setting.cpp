@@ -93,44 +93,6 @@ void key_synctime_cb(epdgui_args_vector_t &args) {
     EPD.UpdateFull(UPDATE_MODE_GL16);
 }
 
-void key_timezone_plus_cb(epdgui_args_vector_t &args) {
-    int *tz = (int *)(args[0]);
-    (*tz)++;
-    if ((*tz) > 12) {
-        (*tz) = 12;
-    }
-    std::string str = std::to_string(*tz);
-    if ((*tz) > 0) {
-        str = "+" + str;
-    }
-    ((EPDGUI_Button *)(args[1]))->setLabel(str);
-    ((EPDGUI_Button *)(args[1]))->Draw(UPDATE_MODE_GL16);
-    SetTimeZone(*tz);
-}
-
-void key_timezone_minus_cb(epdgui_args_vector_t &args) {
-    int *tz = (int *)(args[0]);
-    (*tz)--;
-    if ((*tz) < -11) {
-        (*tz) = -11;
-    }
-    std::string str = std::to_string(*tz);
-    if ((*tz) > 0) {
-        str = "+" + str;
-    }
-    ((EPDGUI_Button *)(args[1]))->setLabel(str);
-    ((EPDGUI_Button *)(args[1]))->Draw(UPDATE_MODE_GL16);
-    SetTimeZone(*tz);
-}
-
-void key_timezone_reset_cb(epdgui_args_vector_t &args) {
-    int *tz = (int *)(args[0]);
-    (*tz)   = 0;
-    ((EPDGUI_Button *)(args[1]))->setLabel(std::to_string(*tz));
-    ((EPDGUI_Button *)(args[1]))->Draw(UPDATE_MODE_GL16);
-    SetTimeZone(*tz);
-}
-
 Frame_Setting::Frame_Setting(void) {
     _frame_name = "Frame_Setting";
 
@@ -148,26 +110,6 @@ Frame_Setting::Frame_Setting(void) {
     _key_restart     = new EPDGUI_Button(4, 340, 532, 61);
     _key_shutdown    = new EPDGUI_Button(4, 400, 532, 61);
 
-    key_timezone_plus = new EPDGUI_Button("+", 448, kTimeZoneY, 88, 52);
-    std::string str        = std::to_string(GetTimeZone());
-    if (GetTimeZone() > 0) {
-        str = "+" + str;
-    }
-    key_timezone_reset = new EPDGUI_Button(str, 360, kTimeZoneY, 88, 52);
-    key_timezone_minus = new EPDGUI_Button("-", 272, kTimeZoneY, 88, 52);
-
-    key_timezone_plus->AddArgs(EPDGUI_Button::EVENT_RELEASED, 0, &_timezone);
-    key_timezone_plus->AddArgs(EPDGUI_Button::EVENT_RELEASED, 1, key_timezone_reset);
-    key_timezone_plus->Bind(EPDGUI_Button::EVENT_RELEASED, key_timezone_plus_cb);
-
-    key_timezone_reset->AddArgs(EPDGUI_Button::EVENT_RELEASED, 0, &_timezone);
-    key_timezone_reset->AddArgs(EPDGUI_Button::EVENT_RELEASED, 1, key_timezone_reset);
-    key_timezone_reset->Bind(EPDGUI_Button::EVENT_RELEASED, key_timezone_reset_cb);
-
-    key_timezone_minus->AddArgs(EPDGUI_Button::EVENT_RELEASED, 0, &_timezone);
-    key_timezone_minus->AddArgs(EPDGUI_Button::EVENT_RELEASED, 1, key_timezone_reset);
-    key_timezone_minus->Bind(EPDGUI_Button::EVENT_RELEASED, key_timezone_minus_cb);
-
     if (language == LANGUAGE_JA) {
         _key_wallpaper->setBMPButton("  壁紙", "\u25B6",
                                      ImageResource_item_icon_wallpaper_32x32);
@@ -178,7 +120,7 @@ Frame_Setting::Frame_Setting(void) {
         _key_restart->setBMPButton("  再起動", "", ImageResource_item_icon_restart_32x32);
         _key_shutdown->setBMPButton("  電源オフ", "",
                                     ImageResource_item_icon_shutdown_32x32);
-        _timezone_canvas->drawString("時間帯 (UTC)", 15, 35);
+        _timezone_canvas->drawString("時間帯", 15, 35);
         exitbtn("ホーム");
         _canvas_title->drawString("設定", 270, 34);
     } else if (language == LANGUAGE_ZH) {
@@ -190,7 +132,7 @@ Frame_Setting::Frame_Setting(void) {
                                    ImageResource_item_icon_ntptime_32x32);
         _key_restart->setBMPButton("  重启", "", ImageResource_item_icon_restart_32x32);
         _key_shutdown->setBMPButton("  关机", "", ImageResource_item_icon_shutdown_32x32);
-        _timezone_canvas->drawString("时区 (UTC)", 15, 35);
+        _timezone_canvas->drawString("时区", 15, 35);
         exitbtn("主页");
         _canvas_title->drawString("设置", 270, 34);
     } else {
@@ -204,7 +146,7 @@ Frame_Setting::Frame_Setting(void) {
                                    ImageResource_item_icon_restart_32x32);
         _key_shutdown->setBMPButton("  Shutdown", "",
                                     ImageResource_item_icon_shutdown_32x32);
-        _timezone_canvas->drawString("Time zone (UTC)", 15, 35);
+        _timezone_canvas->drawString("Time zone", 15, 35);
         exitbtn("Home");
         _canvas_title->drawString("Setting", 270, 34);
     }
@@ -224,7 +166,6 @@ Frame_Setting::Frame_Setting(void) {
     _key_syncntp->AddArgs(EPDGUI_Button::EVENT_RELEASED, 1, _timezone_canvas);
     _key_syncntp->Bind(EPDGUI_Button::EVENT_RELEASED, &key_synctime_cb);
 
-    _timezone = GetTimeZone();
 }
 
 Frame_Setting::~Frame_Setting(void) {
@@ -239,6 +180,7 @@ int Frame_Setting::init(epdgui_args_vector_t &args) {
     _is_run = 1;
     EPD.WriteFullGram4bpp(GetWallpaper());
     _canvas_title->pushCanvas(0, 8, UPDATE_MODE_NONE);
+    DrawTimeZone();
     _timezone_canvas->pushCanvas(0, kTimeZoneY, UPDATE_MODE_NONE);
     EPDGUI_AddObject(_key_wallpaper);
     EPDGUI_AddObject(_key_language);
@@ -246,8 +188,16 @@ int Frame_Setting::init(epdgui_args_vector_t &args) {
     EPDGUI_AddObject(_key_restart);
     EPDGUI_AddObject(_key_syncntp);
     EPDGUI_AddObject(_key_exit);
-    EPDGUI_AddObject(key_timezone_plus);
-    EPDGUI_AddObject(key_timezone_reset);
-    EPDGUI_AddObject(key_timezone_minus);
     return 3;
+}
+// Right half of the time zone row: zone and current offset (IST or IDT).
+void Frame_Setting::DrawTimeZone() {
+    struct tm local;
+    bool is_dst = GetRtcLocalTime(&local) && local.tm_isdst > 0;
+    std::string zone = "Israel  ";
+    zone += GetTimeZoneName(is_dst);
+    _timezone_canvas->fillRect(270, 0, 270, 60, 0);
+    _timezone_canvas->setTextDatum(CR_DATUM);
+    _timezone_canvas->drawString(zone, 540 - 15, 35);
+    _timezone_canvas->setTextDatum(CL_DATUM);
 }

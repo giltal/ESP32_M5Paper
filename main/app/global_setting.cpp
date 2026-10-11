@@ -1,5 +1,7 @@
 #include "global_setting.h"
 #include "./resources/ImageResource.h"
+#include "epdgui/epdgui.h"
+#include "frame/frame_todo.h"
 #include "freertos/semphr.h"
 #define DEFAULT_WALLPAPER 2
 SemaphoreHandle_t _xSemaphore_LoadingAnime = NULL;
@@ -35,15 +37,6 @@ uint16_t global_reader_textsize = 32;
 uint8_t global_time_synced      = false;
 uint8_t global_ttf_file_loaded  = false;
 uint8_t global_init_status      = 0xFF;
-int8_t global_timezone          = 8;
-
-int8_t GetTimeZone(void) {
-    return global_timezone;
-}
-
-void SetTimeZone(int8_t time_zone) {
-    global_timezone = time_zone;
-}
 
 void SetInitStatus(uint8_t idx, uint8_t val) {
     global_init_status &= ~(1 << idx);
@@ -112,23 +105,10 @@ esp_err_t LoadSetting(void) {
     NVS_CHECK(nvs_get_u16(nvs_arg, "Wallpaper", &global_wallpaper));
     NVS_CHECK(nvs_get_u8(nvs_arg, "Language", &global_language));
     NVS_CHECK(nvs_get_u8(nvs_arg, "Timesync", &global_time_synced));
-    nvs_get_i8(nvs_arg, "timezone", &global_timezone);
 
     if (global_wallpaper >= WALLPAPER_NUM) {
         global_wallpaper = DEFAULT_WALLPAPER;
     }
-
-    size_t length = 128;
-    char buf[128];
-    NVS_CHECK(nvs_get_str(nvs_arg, "ssid", buf, &length));
-    global_wifi_ssid = std::string(buf);
-    if (global_wifi_ssid.length() < 1) {
-        return ESP_FAIL;
-    }
-    length = 128;
-    NVS_CHECK(nvs_get_str(nvs_arg, "pswd", buf, &length));
-    global_wifi_password = std::string(buf);
-    global_wifi_configed = true;
     nvs_close(nvs_arg);
     return ESP_OK;
 }
@@ -139,18 +119,76 @@ esp_err_t SaveSetting(void) {
     NVS_CHECK(nvs_set_u16(nvs_arg, "Wallpaper", global_wallpaper));
     NVS_CHECK(nvs_set_u8(nvs_arg, "Language", global_language));
     NVS_CHECK(nvs_set_u8(nvs_arg, "Timesync", global_time_synced));
-    NVS_CHECK(nvs_set_i8(nvs_arg, "timezone", global_timezone));
-    NVS_CHECK(nvs_set_str(nvs_arg, "ssid", global_wifi_ssid.c_str()));
-    NVS_CHECK(nvs_set_str(nvs_arg, "pswd", global_wifi_password.c_str()));
     NVS_CHECK(nvs_commit(nvs_arg));
     nvs_close(nvs_arg);
     return ESP_OK;
 }
 
+// WiFi credentials live only on the SD card, in /wifi.txt:
+//   ssid=<name>
+//   password=<password>
+static const char *kWifiFile = "/wifi.txt";
+
 void SetWifi(std::string ssid, std::string password) {
     global_wifi_ssid     = ssid;
     global_wifi_password = password;
-    SaveSetting();
+    global_wifi_configed = !ssid.empty();
+    if (!sdcard::write_text(kWifiFile,
+                            "ssid=" + ssid + "\npassword=" + password + "\n")) {
+        log_e("WiFi credentials not saved: no SD card");
+    }
+}
+
+// Older firmware kept the credentials in NVS. Move them to the card once,
+// then erase them from flash.
+static void MigrateWifiFromNvs(void) {
+    nvs_handle_t nvs;
+    if (nvs_open("Setting", NVS_READWRITE, &nvs) != ESP_OK) return;
+    char ssid[128] = {}, pswd[128] = {};
+    size_t len1 = sizeof(ssid), len2 = sizeof(pswd);
+    bool found = nvs_get_str(nvs, "ssid", ssid, &len1) == ESP_OK;
+    nvs_get_str(nvs, "pswd", pswd, &len2);
+    bool done = !found;
+    if (found && sdcard::mounted()) {
+        done = sdcard::exists(kWifiFile) ||
+               (ssid[0] == '\0') ||
+               sdcard::write_text(kWifiFile, std::string("ssid=") + ssid +
+                                                 "\npassword=" + pswd + "\n");
+    }
+    if (found && done) {
+        nvs_erase_key(nvs, "ssid");
+        nvs_erase_key(nvs, "pswd");
+        nvs_commit(nvs);
+        log_i("WiFi credentials moved from NVS to the SD card");
+    }
+    nvs_close(nvs);
+}
+
+void LoadWifiConfig(void) {
+    MigrateWifiFromNvs();
+    global_wifi_ssid.clear();
+    global_wifi_password.clear();
+    global_wifi_configed = false;
+
+    std::string text;
+    if (!sdcard::read_text(kWifiFile, &text)) return;
+    size_t pos = 0;
+    while (pos < text.size()) {
+        size_t end = text.find('\n', pos);
+        if (end == std::string::npos) end = text.size();
+        std::string line = text.substr(pos, end - pos);
+        pos              = end + 1;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = line.substr(0, eq);
+        if (key == "ssid") {
+            global_wifi_ssid = line.substr(eq + 1);
+        } else if (key == "password") {
+            global_wifi_password = line.substr(eq + 1);
+        }
+    }
+    global_wifi_configed = !global_wifi_ssid.empty();
 }
 
 uint8_t isWiFiConfiged(void) {
@@ -171,19 +209,50 @@ bool SyncNTPTime(void) {
     const char *server = global_language == LANGUAGE_ZH ? ntpServer_zh : ntpServer;
     struct tm timeInfo;
 
-    if (!sync_ntp(server, global_timezone, &timeInfo, 10000)) {
+    if (!sync_ntp(server, 10000)) {
         log_d("Time Sync failed, server is %s", server);
         return 0;
     }
-
-    m5::rtc_time_t time_struct(timeInfo);
-    M5.Rtc.setTime(&time_struct);
-    m5::rtc_date_t date_struct(timeInfo);
-    M5.Rtc.setDate(&date_struct);
+    time_t now = time(NULL);
+    gmtime_r(&now, &timeInfo);
+    M5.Rtc.setDateTime(&timeInfo);  // the RTC keeps UTC
 
     SetTimeSynced(1);
 
     return 1;
+}
+
+// Asia/Jerusalem: IDT from the Friday before the last Sunday of March, 02:00,
+// to the last Sunday of October, 02:00.
+static const char *kTimeZone = "IST-2IDT,M3.4.4/26,M10.5.0";
+
+void InitTimeZone(void) {
+    setenv("TZ", kTimeZone, 1);
+    tzset();
+}
+
+const char *GetTimeZoneName(bool is_dst) {
+    return is_dst ? "UTC+3 IDT" : "UTC+2 IST";
+}
+
+// Days since 1970-01-01 for a proleptic Gregorian date (H. Hinnant).
+static int64_t DaysFromCivil(int y, unsigned m, unsigned d) {
+    y -= m <= 2;
+    const int64_t era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = (unsigned)(y - era * 400);
+    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + (int64_t)doe - 719468;
+}
+
+bool GetRtcLocalTime(struct tm *local) {
+    m5::rtc_date_t date;
+    m5::rtc_time_t time;
+    if (!M5.Rtc.getDateTime(&date, &time)) return false;
+    time_t utc = DaysFromCivil(date.year, date.month, date.date) * 86400 +
+                 time.hours * 3600 + time.minutes * 60 + time.seconds;
+    localtime_r(&utc, local);
+    return true;
 }
 
 uint16_t GetTextSize() {
@@ -249,14 +318,34 @@ void LoadingAnime_32x32_Stop() {
 }
 
 void Shutdown() {
-    log_d("Now the system is shutting down.");
-    EPD.Clear();
-    EPD.WritePartGram4bpp(92, 182, 356, 300, ImageResource_logo_356x300);
-    EPD.UpdateFull(UPDATE_MODE_GC16);
-    EPD.UpdateFull(UPDATE_MODE_GC16);
+    log_i("Shutting down.");
+    // E-paper keeps its image without power: leave the to-do list on screen,
+    // or the logo when there is no SD card to read the list from.
+    Frame_Todo *todo = (Frame_Todo *)EPDGUI_GetFrame("Frame_Todo");
+    if (todo == NULL) {
+        todo = new Frame_Todo();
+        EPDGUI_AddFrame("Frame_Todo", todo);
+    }
+    if (!todo->DrawPowerOffScreen()) {
+        EPD.Clear();
+        EPD.WritePartGram4bpp(92, 182, 356, 300, ImageResource_logo_356x300);
+    }
     SaveSetting();
-    vTaskDelay(pdMS_TO_TICKS(600));
+    EPD.UpdateFull(UPDATE_MODE_GC16);
+
+    // The panel must finish the refresh before power is cut, or the image is
+    // left half drawn. The IT8951 busy register reads idle ~20 ms after a
+    // full-screen GC16 is issued (measured), long before the refresh ends, so
+    // the fixed delay is what guarantees completion. 5 s leaves a wide margin.
+    uint32_t t0 = now_ms();
     EPD.CheckAFSR();
+    uint32_t t1 = now_ms();
+    vTaskDelay(pdMS_TO_TICKS(5000));
+    EPD.CheckAFSR();
+    log_i("Final refresh: idle after %u ms, then +%u ms", (unsigned)(t1 - t0),
+          (unsigned)(now_ms() - t1));
+    M5.Display.sleep();
+    vTaskDelay(pdMS_TO_TICKS(100));
     M5.Power.setExtOutput(false);
     // Releases the main power hold (G2); on USB power this ends in deep sleep.
     M5.Power.powerOff();

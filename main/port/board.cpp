@@ -1,6 +1,9 @@
 #include "board.h"
 
 #include <sys/stat.h>
+#include <unistd.h>
+
+#include <cstdio>
 
 #include <algorithm>
 #include <cstring>
@@ -8,6 +11,7 @@
 #include <M5Unified.h>
 
 #include "driver/sdspi_host.h"
+#include "epd_display.h"
 #include "esp_event.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -22,19 +26,165 @@ static const char *TAG = "board";
 
 // ---------------------------------------------------------------- SD card
 
+// Some cards answer CMD59 (CRC_ON_OFF) with "illegal command", which makes
+// ESP-IDF abort the mount. CRC is optional in SPI mode (the Arduino SD library
+// never enables it), so treat that answer as "continue without CRC".
+// Hooked in with -Wl,--wrap in main/CMakeLists.txt.
+extern "C" esp_err_t __real_sdmmc_send_cmd_crc_on_off(sdmmc_card_t *card,
+                                                      bool crc_enable);
+extern "C" esp_err_t __wrap_sdmmc_send_cmd_crc_on_off(sdmmc_card_t *card,
+                                                      bool crc_enable) {
+    esp_err_t err = __real_sdmmc_send_cmd_crc_on_off(card, crc_enable);
+    if (err == ESP_ERR_NOT_SUPPORTED) {
+        ESP_LOGW(TAG, "SD card does not support CRC in SPI mode; continuing without it");
+        return ESP_OK;
+    }
+    return err;
+}
+
 namespace sdcard {
 
 static sdmmc_card_t *s_card = nullptr;
 
+// The card shares SPI3 with the IT8951, which M5GFX drives from whichever task
+// is drawing (e.g. the loading animation). Run every SD transaction under the
+// display lock so card commands never interleave with panel traffic.
+static esp_err_t LockedTransaction(int slot, sdmmc_command_t *cmd) {
+    EPD.lock();
+    esp_err_t err = sdspi_host_do_transaction(slot, cmd);
+    EPD.unlock();
+    return err;
+}
+
+// The card's CMD pin is the panel's MOSI and its CLK the panel's SCK. A card
+// powers up in native SD mode, where it ignores CS and takes any traffic on
+// those lines as commands, so it must be switched to SPI mode (CMD0 with CS
+// low) before the panel is used again - otherwise stray panel data can leave it
+// in a state only a power cycle clears, and on USB its 3.3 V never drops.
+// This also recovers a card left mid-transfer by an ESP32 reset: with CS low,
+// clock out any pending data block and send CMD12 (stop transmission) first.
+static void PrepareCard() {
+    spi_device_interface_config_t dev = {};
+    dev.clock_speed_hz                = 400000;
+    dev.spics_io_num                  = -1;
+    dev.queue_size                    = 1;
+    spi_device_handle_t spi;
+    if (spi_bus_add_device(SPI3_HOST, &dev, &spi) != ESP_OK) return;
+
+    uint8_t *buf = (uint8_t *)heap_caps_malloc(64, MALLOC_CAP_DMA);
+    if (buf) {
+        auto clock_out = [&](int bytes) {
+            memset(buf, 0xFF, 64);
+            for (; bytes > 0; bytes -= 64) {
+                spi_transaction_t t = {};
+                t.length    = (bytes < 64 ? bytes : 64) * 8;
+                t.tx_buffer = buf;
+                spi_device_polling_transmit(spi, &t);
+            }
+        };
+        static const uint8_t kCmd12[6] = {0x4C, 0, 0, 0, 0, 0x61};
+        static const uint8_t kCmd0[6]  = {0x40, 0, 0, 0, 0, 0x95};
+        auto send_cmd = [&](const uint8_t *cmd, uint8_t *resp) {
+            memset(buf, 0xFF, 64);
+            memcpy(buf, cmd, 6);
+            spi_transaction_t t = {};
+            t.length    = 16 * 8;
+            t.tx_buffer = buf;
+            t.rx_buffer = buf + 32;
+            spi_device_polling_transmit(spi, &t);
+            if (resp) memcpy(resp, buf + 32 + 6, 10);
+        };
+        EPD.lock();
+        gpio_set_direction(GPIO_NUM_4, GPIO_MODE_OUTPUT);
+        gpio_set_level(GPIO_NUM_4, 0);
+        clock_out(640);  // a 512-byte block, CRC and response slack
+        send_cmd(kCmd12, nullptr);
+        clock_out(64);  // let CMD12 finish (R1b busy)
+        gpio_set_level(GPIO_NUM_4, 1);
+        clock_out(16);
+
+        // A card that powered up while the panel was busy is still in native
+        // SD mode, where it ignores CS and takes panel traffic on MOSI/SCK as
+        // commands. A native CMD0 (CS high) resets it to idle; the CMD0 below
+        // with CS low then switches it to SPI mode.
+        send_cmd(kCmd0, nullptr);
+        clock_out(16);
+        gpio_set_level(GPIO_NUM_4, 0);
+        send_cmd(kCmd0, nullptr);
+        gpio_set_level(GPIO_NUM_4, 1);
+        clock_out(16);
+        EPD.unlock();
+        heap_caps_free(buf);
+    }
+    spi_bus_remove_device(spi);
+}
+
+// Slot card-detect switch (schematic: CARD_CD on GPIO34, 10K pull-up):
+// low while a card is inserted.
+bool present() {
+    static bool configured = false;
+    if (!configured) {
+        gpio_reset_pin(GPIO_NUM_34);
+        gpio_set_direction(GPIO_NUM_34, GPIO_MODE_INPUT);
+        configured = true;
+    }
+    return gpio_get_level(GPIO_NUM_34) == 0;
+}
+
+void unmount() {
+    if (!s_card) return;
+    esp_vfs_fat_sdcard_unmount(kMountPoint, s_card);
+    s_card = nullptr;
+}
+
+bool poll() {
+    static bool stable = present();
+    static int count   = 0;
+    bool now           = present();
+    if (now == stable) {
+        count = 0;
+        return false;
+    }
+    if (++count < 5) return false;  // ~50 ms debounce at the GUI loop rate
+    count  = 0;
+    stable = now;
+    if (now) {
+        ESP_LOGI(TAG, "SD card inserted");
+        // Contacts bounce and the card's supply ramps for a while after the
+        // detect switch closes. Keep the panel off the bus (the card is still
+        // in native mode) until it has settled and been switched to SPI mode.
+        for (int attempt = 0; attempt < 3; attempt++) {
+            EPD.lock();
+            vTaskDelay(pdMS_TO_TICKS(attempt == 0 ? 500 : 300));
+            PrepareCard();
+            EPD.unlock();
+            if (mount()) break;
+        }
+    } else {
+        ESP_LOGI(TAG, "SD card removed");
+        unmount();
+    }
+    return true;
+}
+
 bool mount() {
     if (s_card) return true;
-
+    if (!present()) {
+        ESP_LOGI(TAG, "No SD card");
+        return false;
+    }
+    PrepareCard();
     // The bus (SPI3: SCLK 14, MOSI 12, MISO 13) already belongs to M5GFX for
     // the IT8951; the card is added as a second device on it.
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot         = SPI3_HOST;
-    host.max_freq_khz = 20000;
-
+    // The card shares SCK/MOSI/MISO with the IT8951 through the GPIO matrix
+    // (not the SPI3 IO_MUX pins), and SCK has a 200R series resistor and a
+    // 10K pull-up. At 20 MHz reads come back corrupted (bad R1 / data CRC
+    // right after the switch from the 400 kHz probing clock) and can leave
+    // the card in a state that only a power cycle clears.
+    host.max_freq_khz = 10000;
+    host.do_transaction = LockedTransaction;
     sdspi_device_config_t slot = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot.gpio_cs               = GPIO_NUM_4;
     slot.host_id               = SPI3_HOST;
@@ -74,6 +224,37 @@ std::string path(const std::string &card_path) {
 bool exists(const std::string &card_path) {
     struct stat st;
     return s_card && stat(path(card_path).c_str(), &st) == 0;
+}
+
+bool read_text(const std::string &card_path, std::string *text) {
+    if (!s_card) return false;
+    FILE *f = fopen(path(card_path).c_str(), "rb");
+    if (!f) return false;
+    text->clear();
+    char buf[256];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) text->append(buf, n);
+    fclose(f);
+    return true;
+}
+
+bool write_text(const std::string &card_path, const std::string &text) {
+    if (!s_card) return false;
+    std::string target = path(card_path);
+    std::string tmp    = target + ".tmp";
+    FILE *f            = fopen(tmp.c_str(), "wb");
+    if (!f) return false;
+    bool ok = fwrite(text.data(), 1, text.size(), f) == text.size();
+    ok      = (fclose(f) == 0) && ok;
+    if (ok) {
+        unlink(target.c_str());  // FAT rename() does not replace
+        ok = rename(tmp.c_str(), target.c_str()) == 0;
+    }
+    if (!ok) {
+        unlink(tmp.c_str());
+        ESP_LOGE(TAG, "Cannot write %s", card_path.c_str());
+    }
+    return ok;
 }
 
 }  // namespace sdcard
@@ -214,17 +395,12 @@ void disconnect() {
 
 // ---------------------------------------------------------------- NTP
 
-bool sync_ntp(const char *server, int tz_hours, struct tm *local,
-              uint32_t timeout_ms) {
+bool sync_ntp(const char *server, uint32_t timeout_ms) {
     esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG(server);
     if (esp_netif_sntp_init(&cfg) != ESP_OK) return false;
     bool ok = esp_netif_sntp_sync_wait(pdMS_TO_TICKS(timeout_ms)) == ESP_OK;
     esp_netif_sntp_deinit();
-    if (!ok) return false;
-
-    time_t t = time(nullptr) + (time_t)tz_hours * 3600;
-    gmtime_r(&t, local);
-    return true;
+    return ok;
 }
 
 // ---------------------------------------------------------------- Grove

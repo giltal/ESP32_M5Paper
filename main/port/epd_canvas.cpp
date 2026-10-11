@@ -596,6 +596,20 @@ int16_t EpdCanvas::drawString(const char *string, int32_t poX, int32_t poY) {
     return sumX;
 }
 
+int16_t EpdCanvas::textWidth(const char *string) {
+    font_render_t *r = currentRender();
+    if (r == nullptr) return 0;
+    const uint8_t *s = (const uint8_t *)string;
+    uint16_t len = strlen(string), n = 0;
+    int16_t width = 0;
+    while (n < len) {
+        if (font_render_glyph(r, decodeUTF8(s, &n, len - n)) == ESP_OK) {
+            width += r->advance;
+        }
+    }
+    return width;
+}
+
 void EpdCanvas::setTextArea(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
     if (x > _iwidth || y > _height) return;
     if (x + w > _iwidth) w = _iwidth - x;

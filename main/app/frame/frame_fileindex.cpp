@@ -68,7 +68,28 @@ void Frame_FileIndex::listDir(const char *dirname) {
     std::string dir = sdcard::path(dirname);
     DIR *root       = opendir(dir.c_str());
     if (!root) {
-        log_d("Failed to open directory");
+        log_e("Cannot open %s", dir.c_str());
+        // Show why the list is empty instead of a blank screen.
+        EPDGUI_Button *btn = new EPDGUI_Button(4, 100, 532, 61);
+        _key_files.push_back(btn);
+        EpdCanvas *c = btn->CanvasNormal();
+        c->fillCanvas(0);
+        c->drawRect(0, 0, 532, 61, 15);
+        c->setTextSize(26);
+        c->setTextDatum(CL_DATUM);
+        c->setTextColor(15);
+        uint8_t language = GetLanguage();
+        const char *msg  = !sdcard::mounted() ? "No SD card"
+                                              : "Cannot open this folder";
+        if (language == LANGUAGE_JA) {
+            msg = !sdcard::mounted() ? "SDカードがありません" : "フォルダを開けません";
+        } else if (language == LANGUAGE_ZH) {
+            msg = !sdcard::mounted() ? "没有SD卡" : "无法打开文件夹";
+        }
+        c->pushImage(15, 14, 32, 32, ImageResource_item_icon_file_unknow_32x32);
+        c->drawString(msg, 47 + 13, 35);
+        *(btn->CanvasPressed()) = *c;
+        btn->SetEnable(false);
         return;
     }
 

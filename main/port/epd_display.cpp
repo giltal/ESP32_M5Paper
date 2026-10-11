@@ -76,11 +76,11 @@ bool EpdDisplay::begin() {
 }
 
 void EpdDisplay::lock() {
-    xSemaphoreTakeRecursive(_mutex, portMAX_DELAY);
+    if (_mutex) xSemaphoreTakeRecursive(_mutex, portMAX_DELAY);
 }
 
 void EpdDisplay::unlock() {
-    xSemaphoreGiveRecursive(_mutex);
+    if (_mutex) xSemaphoreGiveRecursive(_mutex);
 }
 
 bool EpdDisplay::clip(int &x, int &y, int &w, int &h) const {
@@ -183,6 +183,7 @@ void EpdDisplay::UpdateArea(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
     _update_count++;
     unlock();
 }
+
 
 void EpdDisplay::CheckAFSR() {
     lock();

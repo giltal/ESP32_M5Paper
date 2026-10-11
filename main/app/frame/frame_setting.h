@@ -17,11 +17,9 @@ class Frame_Setting : public Frame_Base {
     EPDGUI_Button *_key_restart;
     EPDGUI_Button *_key_syncntp;
 
-    EPDGUI_Button *key_timezone_plus;
-    EPDGUI_Button *key_timezone_reset;
-    EPDGUI_Button *key_timezone_minus;
-    int _timezone;
     EpdCanvas *_timezone_canvas;
+
+    void DrawTimeZone();
 };
 
 #endif  //_FRAME_SETTING_H_

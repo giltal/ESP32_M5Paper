@@ -246,13 +246,14 @@ int Frame_FactoryTest::run() {
 
         _canvas_data->fillCanvas(0);
         _canvas_data->setTextSize(26);
+        struct tm local = {};
+        GetRtcLocalTime(&local);
 
         // RTC
-        sprintf(buf, "%04d - %02d - %02d", date_struct.year, date_struct.month,
-                date_struct.date);
+        sprintf(buf, "%04d - %02d - %02d", local.tm_year + 1900, local.tm_mon + 1,
+                local.tm_mday);
         _canvas_data->drawString(buf, POS_RX, 30);
-        sprintf(buf, "%02d : %02d : %02d", time_struct.hours, time_struct.minutes,
-                time_struct.seconds);
+        sprintf(buf, "%02d : %02d : %02d", local.tm_hour, local.tm_min, local.tm_sec);
         _canvas_data->drawString(buf, POS_RX, 90);
 
         // SHT30

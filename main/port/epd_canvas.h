@@ -92,6 +92,11 @@ class EpdCanvas {
     int16_t drawString(const std::string &string, int32_t x, int32_t y) {
         return drawString(string.c_str(), x, y);
     }
+    // Advance width of a UTF-8 string at the current text size, in pixels.
+    int16_t textWidth(const char *string);
+    int16_t textWidth(const std::string &string) {
+        return textWidth(string.c_str());
+    }
 
     // Wrapping text output into a rectangle (used by the textbox and reader).
     void setTextArea(uint16_t x, uint16_t y, uint16_t w, uint16_t h);

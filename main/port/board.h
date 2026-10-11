@@ -18,11 +18,22 @@ namespace sdcard {
 constexpr const char *kMountPoint = "/sd";
 // Mounts the card on the panel's SPI bus (CS = GPIO4). Call after M5.begin().
 bool mount();
+void unmount();
 bool mounted();
+// Card-detect switch: true while a card is in the slot.
+bool present();
+// Call regularly (GUI loop): mounts a newly inserted card, unmounts a removed
+// one. Returns true when the card state changed.
+bool poll();
 uint64_t size_bytes();
 // App paths are card-relative ("/font.ttf"); this returns the VFS path.
 std::string path(const std::string &card_path);
 bool exists(const std::string &card_path);
+// Whole-file text helpers for small files (settings, lists). write_text()
+// writes a temporary file and renames it over the target, so a card pulled
+// mid-write leaves either the old or the new contents.
+bool read_text(const std::string &card_path, std::string *text);
+bool write_text(const std::string &card_path, const std::string &text);
 }  // namespace sdcard
 
 // Sensirion SHT30 on the internal I2C bus (0x44).
@@ -62,9 +73,8 @@ int rssi();
 void disconnect();
 }  // namespace wifi
 
-// Fetches the time over SNTP. On success `local` holds the time at UTC+tz_hours.
-bool sync_ntp(const char *server, int tz_hours, struct tm *local,
-              uint32_t timeout_ms);
+// Sets the system clock (UTC) over SNTP.
+bool sync_ntp(const char *server, uint32_t timeout_ms);
 
 // True if a BMP280/BMP388-style sensor (0x76, chip id 0x58) answers on the
 // given Grove pins; the factory test plugs one into each port.
