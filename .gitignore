@@ -1,0 +1,17 @@
+# ESP-IDF build output and generated config
+build/
+sdkconfig
+sdkconfig.old
+
+# Downloaded by the IDF component manager (versions pinned in dependencies.lock)
+managed_components/
+
+# Local reference sources (original Arduino app and M5EPD library)
+_ref/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
