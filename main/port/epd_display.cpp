@@ -1,11 +1,14 @@
 #include "epd_display.h"
 
+#include <algorithm>
 #include <cstring>
 
 #include <M5Unified.h>
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
+#include "it8951.h"
 
 static const char *TAG = "epd";
 
@@ -72,6 +75,9 @@ bool EpdDisplay::begin() {
     }
     ESP_LOGI(TAG, "Panel %dx%d, rotation %d", (int)M5.Display.width(),
              (int)M5.Display.height(), (int)M5.Display.getRotation());
+
+    _direct = it8951::begin();
+    if (!_direct) ESP_LOGW(TAG, "IT8951 not reachable directly; using M5GFX");
     return true;
 }
 
@@ -167,26 +173,68 @@ void EpdDisplay::UpdateArea(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
     if (mode == UPDATE_MODE_NONE) return;
 
     x     = (x + 3) & 0xFFFC;
+    w     = (w + 3) & 0xFFFC;  // controller loads whole 4-pixel groups
     int X = x, Y = y, W = w, H = h;
     if (!clip(X, Y, W, H)) return;
 
     lock();
-    // Data is always written in quality mode: in the fast modes M5GFX would
-    // reduce it to black and white, and later GC16 refreshes would show that.
-    M5.Display.setEpdMode(epd_mode_t::epd_quality);
-    M5.Display.setClipRect(X, Y, W, H);
-    M5.Display.pushImage(0, 0, kWidth, kHeight, _shadow,
-                         lgfx::color_depth_t::palette_4bit, kPalette.c);
-    M5.Display.clearClipRect();
-    M5.Display.setEpdMode(ToEpdMode(mode));
-    M5.Display.display(X, Y, W, H);
+    if (_direct) {
+        // Don't load new pixels under a refresh that is still running.
+        waitRefresh(X, Y, W, H);
+        it8951::load_area(X, Y, W, H, _shadow + Y * kStride + X / 2, kStride,
+                          true);
+        it8951::display_area(X, Y, W, H, mode);
+        // Track the union of refreshes issued since the panel was last idle.
+        if (_last_w == 0) {
+            _last_x = X;
+            _last_y = Y;
+            _last_w = W;
+            _last_h = H;
+        } else {
+            int r = std::max(_last_x + _last_w, X + W);
+            int b = std::max(_last_y + _last_h, Y + H);
+            _last_x = std::min(_last_x, X);
+            _last_y = std::min(_last_y, Y);
+            _last_w = r - _last_x;
+            _last_h = b - _last_y;
+        }
+        _last_us = esp_timer_get_time();
+    } else {
+        // M5GFX fallback. Data is always written in quality mode: in the fast
+        // modes M5GFX reduces it to black and white.
+        M5.Display.setEpdMode(epd_mode_t::epd_quality);
+        M5.Display.setClipRect(X, Y, W, H);
+        M5.Display.pushImage(0, 0, kWidth, kHeight, _shadow,
+                             lgfx::color_depth_t::palette_4bit, kPalette.c);
+        M5.Display.clearClipRect();
+        M5.Display.setEpdMode(ToEpdMode(mode));
+        M5.Display.display(X, Y, W, H);
+    }
     _update_count++;
     unlock();
+}
+
+void EpdDisplay::waitRefresh(int x, int y, int w, int h) {
+    if (_last_w == 0) return;
+    if (w != 0 && (x >= _last_x + _last_w || _last_x >= x + w ||
+                   y >= _last_y + _last_h || _last_y >= y + h)) {
+        return;  // no overlap: the controller runs them in parallel
+    }
+    // The busy register reads idle for a few ms after a refresh command,
+    // until the refresh has actually started.
+    int64_t since = esp_timer_get_time() - _last_us;
+    if (since < 30000) vTaskDelay(pdMS_TO_TICKS(30 - since / 1000) + 1);
+    it8951::wait_idle(5000);
+    _last_w = 0;
 }
 
 
 void EpdDisplay::CheckAFSR() {
     lock();
-    M5.Display.waitDisplay();
+    if (_direct) {
+        waitRefresh(0, 0, 0, 0);
+    } else {
+        M5.Display.waitDisplay();
+    }
     unlock();
 }

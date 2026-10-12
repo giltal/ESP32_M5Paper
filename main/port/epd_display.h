@@ -1,10 +1,11 @@
-// IT8951 e-paper access for the M5Paper, on top of M5GFX.
+// IT8951 e-paper access for the M5Paper.
 //
 // Mirrors the M5EPD_Driver API the factory test was written against:
 // image data is written with no refresh, then an area is refreshed with a
-// chosen waveform. M5GFX merges every pending write into its next refresh, so
-// writes go to a full-screen shadow buffer instead, and each Update* call pushes
-// only the requested area to the panel just before refreshing it.
+// chosen waveform. Writes go to a full-screen shadow buffer, and each Update*
+// call loads only the requested area into the controller just before
+// refreshing it. Loads and refreshes go straight to the IT8951 (it8951.h);
+// M5GFX is only the fallback if the controller cannot be reached directly.
 #pragma once
 
 #include <cstdint>
@@ -13,14 +14,15 @@
 #include "freertos/semphr.h"
 
 typedef enum {
-    UPDATE_MODE_INIT  = 0,  // Display initialization (M5GFX: GC16)
+    // Values are the IT8951 waveform numbers.
+    UPDATE_MODE_INIT  = 0,  // Display initialization
     UPDATE_MODE_DU    = 1,  // Monochrome menu, text input
     UPDATE_MODE_GC16  = 2,  // High quality images
     UPDATE_MODE_GL16  = 3,  // Text with white background
-    UPDATE_MODE_GLR16 = 4,  // Text with white background (M5GFX: GL16)
-    UPDATE_MODE_GLD16 = 5,  // Text and graphics, white bg (M5GFX: GL16)
+    UPDATE_MODE_GLR16 = 4,  // Text with white background
+    UPDATE_MODE_GLD16 = 5,  // Text and graphics, white bg
     UPDATE_MODE_DU4   = 6,  // Fast page flipping
-    UPDATE_MODE_A2    = 7,  // Anti-aliased text in menus (M5GFX: DU)
+    UPDATE_MODE_A2    = 7,  // Anti-aliased text in menus
     UPDATE_MODE_NONE  = 8   // Write only, no refresh
 } m5epd_update_mode_t;
 
@@ -64,9 +66,16 @@ class EpdDisplay {
                    int src_stride);
     bool clip(int &x, int &y, int &w, int &h) const;
 
+    // Waits for refreshes that overlap the given area (or all, if w == 0).
+    void waitRefresh(int x, int y, int w, int h);
+
     uint8_t *_shadow           = nullptr;
     SemaphoreHandle_t _mutex   = nullptr;
     uint32_t _update_count     = 0;
+    bool _direct               = false;  // it8951 driver in use
+    // Last refresh area and when it was issued (for overlap waits).
+    int _last_x = 0, _last_y = 0, _last_w = 0, _last_h = 0;
+    int64_t _last_us = 0;
 };
 
 extern EpdDisplay EPD;
