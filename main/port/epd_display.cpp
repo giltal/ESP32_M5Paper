@@ -228,7 +228,6 @@ void EpdDisplay::waitRefresh(int x, int y, int w, int h) {
     _last_w = 0;
 }
 
-
 void EpdDisplay::CheckAFSR() {
     lock();
     if (_direct) {
