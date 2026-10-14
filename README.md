@@ -9,6 +9,8 @@ ported from Arduino/PlatformIO to **ESP-IDF 5.5** with
 - WiFi login and to-do list stored as plain text on the **SD card**
 - clock in **Israel time** with automatic daylight saving
 - SD card fixes for the M5Paper's shared SPI bus, including hot-plug
+- a direct IT8951 display driver: faster screen updates (a full-screen
+  update takes ~160 ms instead of ~250 ms) and all eight e-paper waveforms
 
 Target: M5Paper v1.0 / v1.1 (ESP32-D0WDQ6-V3, 16 MB flash, 8 MB PSRAM,
 IT8951 e-paper controller, GT911 touch). The board schematic is in
@@ -109,7 +111,8 @@ main/
     resources/        images and the built-in font
   port/               replaces M5EPD and the Arduino core
     epd_canvas.*      16-gray canvas with M5EPD's buffer layout + FreeType text
-    epd_display.*     IT8951 access through M5GFX (full-screen shadow buffer)
+    epd_display.*     full-screen shadow buffer, pushed to the panel by it8951.*
+    it8951.*          direct IT8951 driver (4bpp loads, waveforms, busy flag)
     board.*           SD card, SHT30, WiFi, NTP, Grove port check
     font_render.*     FreeType glyph cache (from M5EPD)
 bootloader_components/
@@ -126,6 +129,11 @@ documents/            M5Paper v1.1 product sheet and schematic
   3.3 V stays on while USB is connected), so on insertion the firmware keeps
   the display off the bus until the card is in SPI mode.
 - SD card-detect is GPIO34 (low = card present).
+- Screen updates go straight to the IT8951 (`it8951.cpp`): 4bpp rows at
+  20 MHz with the requested waveform. M5GFX still initialises the panel and
+  reads touch, and is used for updates if the IT8951 cannot be read at
+  start-up. The IT8951 busy register reads idle for a few ms after a
+  refresh command is issued, so waits first give the command time to start.
 
 ## License
 
