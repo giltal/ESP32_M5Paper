@@ -5,7 +5,8 @@ ported from Arduino/PlatformIO to **ESP-IDF 5.5** with
 [M5Unified](https://github.com/m5stack/M5Unified) and
 [M5GFX](https://github.com/m5stack/M5GFX), plus:
 
-- a **To-Do** app (replaces LifeGame), shown on the e-paper while the device is off
+- a **To-Do** app (replaces LifeGame) with the time and date in its title
+  bar, shown on the e-paper while the device is off
 - WiFi login and to-do list stored as plain text on the **SD card**
 - clock in **Israel time** with automatic daylight saving
 - SD card fixes for the M5Paper's shared SPI bus, including hot-plug
@@ -93,12 +94,17 @@ English.
 - **Power off:** *Setting → Shutdown*, or automatically after 5 minutes
   without input (a warning appears 10 s before). The to-do list, with the
   time of shutdown, stays on the e-paper while the device is off; without an
-  SD card the M5Stack logo is shown instead.
+  SD card the M5Stack logo is shown instead. The device waits about 5 s for
+  that screen to finish drawing before it cuts power. On USB power the board
+  cannot switch itself off; it goes to deep sleep instead.
 - **Time:** *Setting → Sync Time* sets the RTC over NTP (WiFi must be
   connected). The RTC keeps UTC; the display follows Israel time (IST/IDT),
   including daylight saving changes, without re-syncing.
 - **To-Do:** tap a task to tick it, **X** deletes it, **+ Add** opens the
-  keyboard, **Clear done** removes ticked tasks.
+  keyboard, **Clear done** removes ticked tasks. The title bar shows the
+  current time and date (updated every minute, in the UI language).
+- **Screen test:** hold the side rocker switch towards G39 (right) while the
+  device starts to run M5Stack's panel life test.
 
 ## Project layout
 
